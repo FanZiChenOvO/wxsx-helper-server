@@ -1,0 +1,7 @@
+.history
+.venv
+__pycache__/
+*.py[cod]
+dist/
+dist.zip
+dist-exe
