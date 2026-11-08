@@ -145,6 +145,113 @@ def get_batch_marked(shop_name, after_sale_ids):
 
 
 # ================================================================
+# 附加状态（物流动作 / 电话动作 / 补货状态）
+#
+# 存在 custom_fields 这个 JSON 字段里，不改表结构：
+#   {"logistics": "intercept", "phone": "called", "restock": "needed"}
+# 空字符串表示「没选」。
+#
+# 为什么用 JSON 而不是加列：
+#   加列要写迁移，旧库升级容易漏；这三个字段以后大概率还会加，
+#   用 JSON 加一个 key 就行，不用动表。
+# ================================================================
+
+# 允许的 key，防止前端乱塞东西进 JSON
+# logistics_no 是自动从列表页悬浮框抓到的发货物流单号（只存第一条）
+EXTRA_KEYS = ('logistics', 'phone', 'restock', 'logistics_no')
+
+
+def _empty_extra():
+    """全空的附加状态"""
+    return {key: '' for key in EXTRA_KEYS}
+
+
+def get_extra(shop_name, after_sale_id):
+    """读取某售后单的附加状态，缺省字段补空字符串"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT custom_fields FROM custom_data WHERE shop_name=? AND after_sale_id=?",
+        (shop_name, after_sale_id)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    result = _empty_extra()
+    if row and row['custom_fields']:
+        try:
+            saved = json.loads(row['custom_fields'])
+            if isinstance(saved, dict):
+                for key in EXTRA_KEYS:
+                    value = saved.get(key, '')
+                    if isinstance(value, str):
+                        result[key] = value
+        except (ValueError, TypeError):
+            pass
+    return result
+
+
+def patch_extra(shop_name, after_sale_id, patch):
+    """合并写入附加状态（只改 patch 里带的 key，其余保持原样）"""
+    if not isinstance(patch, dict):
+        return get_extra(shop_name, after_sale_id)
+
+    current = get_extra(shop_name, after_sale_id)
+    for key, value in patch.items():
+        if key in EXTRA_KEYS and isinstance(value, str):
+            current[key] = value
+
+    payload = json.dumps(current, ensure_ascii=False)
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT INTO custom_data (shop_name, after_sale_id, custom_fields, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(shop_name, after_sale_id)
+        DO UPDATE SET custom_fields=?, updated_at=?
+    """, (shop_name, after_sale_id, payload, now, payload, now))
+    conn.commit()
+    conn.close()
+    return current
+
+
+def get_batch_extra(shop_name, after_sale_ids):
+    """批量读附加状态：{ "id": {"logistics": "", ...} }"""
+    if not after_sale_ids:
+        return {}
+    conn = get_db()
+    cursor = conn.cursor()
+    placeholders = ','.join('?' * len(after_sale_ids))
+    cursor.execute(
+        f"SELECT after_sale_id, custom_fields FROM custom_data WHERE shop_name=? AND after_sale_id IN ({placeholders})",
+        [shop_name] + after_sale_ids
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = {}
+    for row in rows:
+        item = _empty_extra()
+        if row['custom_fields']:
+            try:
+                saved = json.loads(row['custom_fields'])
+                if isinstance(saved, dict):
+                    for key in EXTRA_KEYS:
+                        value = saved.get(key, '')
+                        if isinstance(value, str):
+                            item[key] = value
+            except (ValueError, TypeError):
+                pass
+        result[row['after_sale_id']] = item
+
+    for aid in after_sale_ids:
+        if aid not in result:
+            result[aid] = _empty_extra()
+    return result
+
+
+# ================================================================
 # 备注操作（为后续功能预留）
 # ================================================================
 

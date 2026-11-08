@@ -4,4 +4,8 @@ __pycache__/
 *.py[cod]
 dist/
 dist.zip
-dist-exe
+dist-exe/
+build-exe/
+*.exe
+*.spec
+data/*.db.bak-*

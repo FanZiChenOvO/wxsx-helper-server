@@ -8,7 +8,11 @@ import os
 import sys
 
 # Flask 服务端口
-PORT = 5000
+# 默认 5000；可用环境变量 WXSX_PORT 覆盖（打包后做隔离自检时会用到）
+try:
+    PORT = int(os.environ.get('WXSX_PORT', '5000'))
+except ValueError:
+    PORT = 5000
 
 # 监听地址：
 #   '127.0.0.1' → 仅本机访问

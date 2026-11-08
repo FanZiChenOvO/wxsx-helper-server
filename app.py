@@ -19,6 +19,9 @@ from db import (
     get_marked,
     set_marked,
     get_batch_marked,
+    get_extra,
+    patch_extra,
+    get_batch_extra,
     get_remark,
     set_remark,
     get_stats,
@@ -78,46 +81,70 @@ def health():
 
 @app.route('/api/marked', methods=['GET'])
 def api_get_marked():
-    """获取某售后单的标记状态
+    """获取某售后单的全部状态
     参数：shop_name, after_sale_id
-    返回：{ "mark_status": "unmarked" / "marked" / "following" }
+    返回：{
+        "mark_status": "unmarked"/"marked"/"following",
+        "extra": {"logistics": "", "phone": "", "restock": ""}
+    }
     """
     shop_name = request.args.get('shop_name', '')
     after_sale_id = request.args.get('after_sale_id', '')
     if not shop_name or not after_sale_id:
         return jsonify({'error': '缺少参数 shop_name 或 after_sale_id'}), 400
     mark_status = get_marked(shop_name, after_sale_id)
-    return jsonify({'mark_status': mark_status})
+    return jsonify({
+        'mark_status': mark_status,
+        'extra': get_extra(shop_name, after_sale_id),
+    })
 
 
 @app.route('/api/marked', methods=['POST'])
 def api_set_marked():
-    """设置某售后单的标记状态
-    body: { "shop_name": "...", "after_sale_id": "...", "mark_status": "unmarked"/"marked"/"following" }
+    """设置某售后单的状态
+    body: {
+        "shop_name": "...",
+        "after_sale_id": "...",
+        "mark_status": "unmarked"/"marked"/"following",   # 可省略
+        "extra": {"logistics": "intercept", "phone": "called", ...}  # 可省略，只传要改的 key
+    }
     兼容旧接口：marked: true/false
+
+    两个字段都省略时不做任何写入，避免误把标记重置成未处理。
     """
     data = request.get_json()
     if not data or not data.get('shop_name') or not data.get('after_sale_id'):
         return jsonify({'error': '缺少参数 shop_name 或 after_sale_id'}), 400
 
-    # 兼容旧的 marked boolean 字段
+    shop_name = data['shop_name']
+    after_sale_id = data['after_sale_id']
+
+    # 标记状态：带了才写
+    mark_status = None
     if 'mark_status' in data:
         mark_status = data['mark_status']
     elif 'marked' in data:
         mark_status = 'marked' if data['marked'] else 'unmarked'
-    else:
-        mark_status = 'unmarked'
 
-    set_marked(data['shop_name'], data['after_sale_id'], mark_status)
-    return jsonify({'success': True, 'mark_status': mark_status})
+    if mark_status is not None:
+        set_marked(shop_name, after_sale_id, mark_status)
+
+    # 附加状态：带了才合并
+    if isinstance(data.get('extra'), dict):
+        patch_extra(shop_name, after_sale_id, data['extra'])
+
+    return jsonify({
+        'success': True,
+        'mark_status': get_marked(shop_name, after_sale_id),
+        'extra': get_extra(shop_name, after_sale_id),
+    })
 
 
 @app.route('/api/marked/batch', methods=['POST'])
 def api_batch_marked():
-    """批量获取多个售后单的标记状态
+    """批量获取多个售后单的状态
     body: { "shop_name": "...", "after_sale_ids": ["id1", "id2", ...] }
-    返回：{ "marks": { "id1": "unmarked", "id2": "marked", ... } }
-    兼容旧接口：同时返回 "marked" 字段（id -> bool，已处理=true）
+    返回：{ "marks": {...}, "marked": {...}, "extras": { "id": {...} } }
     """
     data = request.get_json()
     if not data or not data.get('shop_name') or not data.get('after_sale_ids'):
@@ -125,7 +152,8 @@ def api_batch_marked():
     result = get_batch_marked(data['shop_name'], data['after_sale_ids'])
     # 兼容旧接口
     marked_compat = {k: v == 'marked' for k, v in result.items()}
-    return jsonify({'marks': result, 'marked': marked_compat})
+    extras = get_batch_extra(data['shop_name'], data['after_sale_ids'])
+    return jsonify({'marks': result, 'marked': marked_compat, 'extras': extras})
 
 
 # ================================================================
